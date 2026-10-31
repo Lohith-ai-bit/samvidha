@@ -1,134 +1,185 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import Link from "next/link";
-import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { FileText, RefreshCw } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { FileText, RefreshCw, Eye, Loader2 } from "lucide-react";
 import DashboardLayout from "@/components/dashboard/Layout";
+import { apiPost, getSession } from "@/lib/client";
+
+interface Exam {
+  sno: number;
+  exam_title: string;
+  exam_code: string;
+}
+interface GradeSheet {
+  rollNumber: string;
+  name: string;
+  branch: string;
+  sgpa: number | null;
+  courses: { sNo: number; courseCode: string; courseName: string; grade: string; gradePoint: number | null; status: string; credits: number }[];
+}
 
 export default function ExamResultsPage() {
-  const [session, setSession] = useState<any>(null);
-  const [data, setData] = useState<string | null>(null);
+  const [exams, setExams] = useState<Exam[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [openCode, setOpenCode] = useState<string | null>(null);
+  const [sheet, setSheet] = useState<GradeSheet | null>(null);
+  const [sheetLoading, setSheetLoading] = useState(false);
 
-  useEffect(() => {
-    let activeSession = null;
-    if (typeof window !== "undefined") {
-      const stored = sessionStorage.getItem("samvidha_session");
-      if (stored) {
-        try {
-          activeSession = JSON.parse(stored);
-          setSession(activeSession);
-        } catch {
-          setSession(null);
-        }
-      }
-    }
-    fetchData(activeSession);
-  }, []);
-
-  async function fetchData(currentSession?: any) {
-    const active = currentSession || session;
-    if (!active) {
-      setLoading(false);
-      return;
-    }
+  const load = useCallback(async () => {
+    if (!getSession()) return;
     setLoading(true);
     try {
-      const res = await fetch("/api/exam-results", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ session: active }),
-      });
-      const json = await res.json();
-      if (json.success) {
-        setData(json.data.html);
-      } else {
-        setError(json.error || "Failed to load exam results");
-      }
-    } catch (err: any) {
-      setError(err.message || "Failed to load exam results");
+      const json = await apiPost<{ success: boolean; exams: Exam[] }>("/api/exam-results");
+      if (json.success) setExams(json.exams || []);
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
 
-  if (loading) {
-    return (
-      <DashboardLayout>
-        <div className="flex flex-col items-center justify-center h-full">
-          <FileText className="h-10 w-10 animate-spin text-primary mb-2" />
-          <p className="text-muted-foreground">
-            Fetching exam results from Samvidha...
-          </p>
-        </div>
-      </DashboardLayout>
-    );
-  }
+  useEffect(() => {
+    load();
+  }, [load]);
 
-  if (!session) {
-    return (
-      <DashboardLayout>
-        <div className="flex flex-col items-center justify-center h-full text-center">
-          <h1 className="text-2xl font-bold mb-2">Session expired</h1>
-          <p className="text-muted-foreground mb-6">Please log in again.</p>
-          <Link href="/">
-            <Button>Log in</Button>
-          </Link>
-        </div>
-      </DashboardLayout>
-    );
+  async function openSheet(code: string, title: string) {
+    setOpenCode(code);
+    setSheet(null);
+    setSheetLoading(true);
+    try {
+      const json = await apiPost<{ success: boolean; sheet: GradeSheet }>("/api/exam-results", {
+        examCode: code,
+        examTitle: title,
+      });
+      if (json.success) setSheet(json.sheet);
+    } finally {
+      setSheetLoading(false);
+    }
   }
 
   return (
     <DashboardLayout>
-      <div className="mb-6">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight">Exam Results</h1>
-            <p className="text-muted-foreground">
-              Examination results and grade sheets from Samvidha portal
-            </p>
-          </div>
-          <Button onClick={fetchData}>
-            <RefreshCw className="h-4 w-4 mr-2" /> Refresh
-          </Button>
+      <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h1 className="flex items-center gap-2.5 text-2xl font-bold text-white">
+            <FileText className="h-6 w-6 text-orange-400" /> Exam Results
+          </h1>
+          <p className="mt-1 text-sm text-slate-400">Semester-end grade sheets streamed live from Samvidha.</p>
         </div>
+        <button
+          onClick={load}
+          className="flex items-center gap-1.5 rounded-lg border border-[#1c2940] px-3.5 py-2 text-xs font-semibold text-slate-300 hover:bg-white/5"
+        >
+          <RefreshCw className="h-3.5 w-3.5" /> Refresh
+        </button>
       </div>
 
-      {error && (
-        <div className="mb-6 p-4 rounded-lg bg-destructive/50 border border-destructive/20 text-destructive text-sm">
-          {error}
+      <div className="panel overflow-hidden">
+        {loading ? (
+          <div className="flex h-56 items-center justify-center text-slate-400">Loading examinations…</div>
+        ) : exams.length === 0 ? (
+          <div className="flex h-56 items-center justify-center text-sm text-slate-500">No examination results published yet.</div>
+        ) : (
+          <table className="w-full text-left text-sm">
+            <thead>
+              <tr className="border-b border-[#1c2940] bg-[#0a1120] text-xs text-slate-500">
+                <th className="px-6 py-3 font-medium">S.No</th>
+                <th className="px-4 py-3 font-medium">Examination Code</th>
+                <th className="px-4 py-3 font-medium">Examination Title</th>
+                <th className="px-6 py-3 text-right font-medium">Grade Sheet</th>
+              </tr>
+            </thead>
+            <tbody>
+              {exams.map((e) => (
+                <tr key={e.exam_code} className="border-b border-[#131d33] text-slate-300">
+                  <td className="px-6 py-3.5">{e.sno}</td>
+                  <td className="px-4 py-3.5 font-semibold text-white">{e.exam_code}</td>
+                  <td className="px-4 py-3.5">{e.exam_title}</td>
+                  <td className="px-6 py-3.5 text-right">
+                    <button
+                      onClick={() => openSheet(e.exam_code, e.exam_title)}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-sky-500"
+                    >
+                      <Eye className="h-3.5 w-3.5" /> View
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* Grade sheet modal */}
+      {openCode && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={() => setOpenCode(null)}>
+          <div
+            className="panel max-h-[85vh] w-full max-w-3xl overflow-y-auto p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-4 flex items-center justify-between">
+              <div>
+                <h3 className="text-lg font-bold text-white">Grade Sheet — {openCode}</h3>
+                <p className="text-xs text-slate-500">{exams.find((e) => e.exam_code === openCode)?.exam_title}</p>
+              </div>
+              <button onClick={() => setOpenCode(null)} className="rounded-lg border border-[#1c2940] px-3 py-1.5 text-xs font-semibold text-slate-300 hover:bg-white/5">
+                Close
+              </button>
+            </div>
+
+            {sheetLoading ? (
+              <div className="flex h-40 items-center justify-center text-slate-400">
+                <Loader2 className="mr-2 h-5 w-5 animate-spin" /> Fetching grade sheet…
+              </div>
+            ) : sheet ? (
+              <>
+                <div className="mb-4 grid grid-cols-3 gap-3 text-xs">
+                  <div className="rounded-lg border border-[#1c2940] bg-[#0a1120] p-3">
+                    <p className="text-slate-500">Roll Number</p>
+                    <p className="mt-0.5 font-bold text-white">{sheet.rollNumber}</p>
+                  </div>
+                  <div className="rounded-lg border border-[#1c2940] bg-[#0a1120] p-3">
+                    <p className="text-slate-500">Name</p>
+                    <p className="mt-0.5 font-bold text-white">{sheet.name}</p>
+                  </div>
+                  <div className="rounded-lg border border-[#1c2940] bg-[#0a1120] p-3">
+                    <p className="text-slate-500">SGPA</p>
+                    <p className="mt-0.5 font-bold text-emerald-400">{sheet.sgpa ?? "—"}</p>
+                  </div>
+                </div>
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-[#1c2940] text-slate-500">
+                      <th className="py-2.5 pr-4 font-medium">S.No</th>
+                      <th className="py-2.5 pr-4 font-medium">Course Code</th>
+                      <th className="py-2.5 pr-4 font-medium">Course Name</th>
+                      <th className="py-2.5 pr-4 font-medium">Grade</th>
+                      <th className="py-2.5 pr-4 font-medium">Points</th>
+                      <th className="py-2.5 pr-4 font-medium">Status</th>
+                      <th className="py-2.5 font-medium">Credits</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sheet.courses.map((c) => (
+                      <tr key={c.sNo} className="border-b border-[#131d33] text-slate-300">
+                        <td className="py-2.5 pr-4">{c.sNo}</td>
+                        <td className="py-2.5 pr-4 font-semibold text-white">{c.courseCode}</td>
+                        <td className="py-2.5 pr-4">{c.courseName}</td>
+                        <td className="py-2.5 pr-4 font-bold text-blue-400">{c.grade}</td>
+                        <td className="py-2.5 pr-4">{c.gradePoint ?? "—"}</td>
+                        <td className="py-2.5 pr-4">{c.status}</td>
+                        <td className="py-2.5">{c.credits.toFixed(2)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </>
+            ) : (
+              <div className="flex h-40 items-center justify-center text-sm text-slate-500">
+                Could not load the grade sheet.
+              </div>
+            )}
+          </div>
         </div>
       )}
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Exam Results</CardTitle>
-        </CardHeader>
-        <CardContent className="h-[600px] overflow-auto border rounded-lg bg-gray-50">
-          <div
-            dangerouslySetInnerHTML={{
-              __html:
-                data ||
-                "<p class='text-muted-foreground text-center py-20'>No exam results available.</p>",
-            }}
-          />
-        </CardContent>
-        <CardFooter>
-          <p className="text-xs text-muted-foreground">
-            Data trapped live from Samvidha portal — rendered directly.
-          </p>
-        </CardFooter>
-      </Card>
     </DashboardLayout>
   );
 }

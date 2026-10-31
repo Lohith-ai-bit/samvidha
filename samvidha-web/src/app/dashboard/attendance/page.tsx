@@ -1,261 +1,283 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import Link from "next/link";
-import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { cn } from "@/lib/utils";
-import {
-  ResponsiveContainer,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
-  Cell,
-} from "recharts";
-import { Activity } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { ClipboardList, RefreshCw, Filter, Info } from "lucide-react";
 import DashboardLayout from "@/components/dashboard/Layout";
+import { apiPost, getSession } from "@/lib/client";
 
-const ATTENDANCE_COLORS = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6"];
+interface RegisterEntry {
+  date: string;
+  period: string;
+  course: string;
+  status: string;
+}
+interface Subject {
+  courseCode: string;
+  courseName: string;
+  conducted: number;
+  attended: number;
+  percentage: number;
+  status: string;
+}
+interface AttendanceData {
+  academicYear: string;
+  semesterLastDate: string;
+  portalNotice: string;
+  hasData: boolean;
+  subjects: Subject[];
+  register: RegisterEntry[];
+}
+interface CreditSemester {
+  semester: string;
+  courses: {
+    courseCode: string;
+    courseName: string;
+    credits: number;
+    attendance: number | null;
+    grade: string;
+    gradePoint: number | null;
+  }[];
+}
+interface CreditData {
+  semesters: CreditSemester[];
+  cgpa: number | null;
+}
 
-export default function AttendancePage() {
-  const [session, setSession] = useState<any>(null);
-  const [data, setData] = useState<any>(null);
+const SNAPSHOT_KEY = "iare_attendance_snapshot";
+
+export default function AttendanceRegisterPage() {
+  const [att, setAtt] = useState<AttendanceData | null>(null);
+  const [credit, setCredit] = useState<CreditData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [filter, setFilter] = useState("ALL");
+  const [historySem, setHistorySem] = useState("");
 
-  useEffect(() => {
-    let activeSession = null;
-    if (typeof window !== "undefined") {
-      const stored = sessionStorage.getItem("samvidha_session");
-      if (stored) {
-        try {
-          activeSession = JSON.parse(stored);
-          setSession(activeSession);
-        } catch {
-          setSession(null);
-        }
-      }
-    }
-    fetchData(activeSession);
-  }, []);
-
-  async function fetchData(currentSession?: any) {
-    const active = currentSession || session;
-    if (!active) {
-      setLoading(false);
-      return;
-    }
+  const load = useCallback(async () => {
+    if (!getSession()) return;
     setLoading(true);
     try {
-      const res = await fetch("/api/attendance", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ session: active }),
-      });
-      const json = await res.json();
-      if (json.success) {
-        setData(json.data);
-      } else {
-        setError(json.error || "Failed to load attendance");
+      // restore cached snapshot instantly
+      try {
+        const raw = localStorage.getItem(SNAPSHOT_KEY);
+        if (raw) setAtt(JSON.parse(raw));
+      } catch {}
+
+      const [attR, creditR] = await Promise.all([
+        apiPost<{ success: boolean; data: AttendanceData }>("/api/attendance"),
+        apiPost<{ success: boolean; data: CreditData }>("/api/credit-register"),
+      ]);
+      if (attR.success && attR.data) {
+        setAtt(attR.data);
+        if (attR.data.hasData) {
+          localStorage.setItem(
+            SNAPSHOT_KEY,
+            JSON.stringify({ ...attR.data, syncedAt: new Date().toISOString() })
+          );
+        }
       }
-    } catch (err: any) {
-      setError(err.message || "Failed to load attendance");
+      if (creditR.success && creditR.data) {
+        setCredit(creditR.data);
+        const firstEvaluated =
+          [...creditR.data.semesters].reverse().find((s) => s.courses.some((c) => c.attendance !== null))?.semester || "";
+        setHistorySem((h) => h || firstEvaluated);
+      }
     } finally {
       setLoading(false);
     }
+  }, []);
+
+  useEffect(() => {
+    load();
+    const onSync = () => load();
+    window.addEventListener("iare:sync", onSync);
+    return () => window.removeEventListener("iare:sync", onSync);
+  }, [load]);
+
+  // Build the day × subject matrix from register entries
+  const matrix = useMemo(() => {
+    if (!att?.register?.length) return null;
+    const dates = [...new Set(att.register.map((e) => e.date))];
+    const courses = [...new Set(att.register.map((e) => e.course))].filter(Boolean);
+
+    // sort dates newest first (handle both "30 Oct, 2026" and "2026-10-30")
+    const parseDate = (d: string) => {
+      const iso = Date.parse(d);
+      if (!isNaN(iso)) return iso;
+      const m = d.match(/(\d{1,2})\s+([A-Za-z]{3})[a-z]*,?\s+(\d{4})/);
+      if (m) return Date.parse(`${m[2]} ${m[1]} ${m[3]}`);
+      return 0;
+    };
+    dates.sort((a, b) => parseDate(b) - parseDate(a));
+
+    const cell = new Map<string, RegisterEntry>();
+    for (const e of att.register) cell.set(`${e.date}|${e.course}`, e);
+
+    const perCourse: Record<string, { p: number; a: number }> = {};
+    for (const e of att.register) {
+      if (!perCourse[e.course]) perCourse[e.course] = { p: 0, a: 0 };
+      if (e.status.toUpperCase().startsWith("P")) perCourse[e.course].p++;
+      else if (e.status.toUpperCase().startsWith("A")) perCourse[e.course].a++;
+    }
+
+    return { dates, courses, cell, perCourse };
+  }, [att]);
+
+  const shownCourses = matrix ? (filter === "ALL" ? matrix.courses : matrix.courses.filter((c) => c === filter)) : [];
+
+  function badge(status: string) {
+    const s = status.toUpperCase();
+    if (s.startsWith("P")) {
+      return (
+        <span className="inline-flex min-w-[26px] justify-center rounded bg-emerald-500/15 px-1.5 py-1 text-[10px] font-bold text-emerald-400">
+          {status}
+        </span>
+      );
+    }
+    if (s.startsWith("A")) {
+      return (
+        <span className="inline-flex min-w-[26px] justify-center rounded bg-red-500/15 px-1.5 py-1 text-[10px] font-bold text-red-400">
+          {status}
+        </span>
+      );
+    }
+    return <span className="text-slate-700">·</span>;
   }
-
-  if (loading) {
-    return (
-      <DashboardLayout>
-        <div className="flex flex-col items-center justify-center h-full">
-          <Activity className="h-10 w-10 animate-spin text-primary mb-2" />
-          <p className="text-muted-foreground">Fetching attendance from Samvidha...</p>
-        </div>
-      </DashboardLayout>
-    );
-  }
-
-  if (!session) {
-    return (
-      <DashboardLayout>
-        <div className="flex flex-col items-center justify-center h-full text-center">
-          <h1 className="text-2xl font-bold mb-2">Session expired</h1>
-          <p className="text-muted-foreground mb-6">Please log in again.</p>
-          <Link href="/">
-            <Button>Log in</Button>
-          </Link>
-        </div>
-      </DashboardLayout>
-    );
-  }
-
-  const courses = data?.courses || [];
-  const studentInfo = data?.studentInfo || {};
-  const avgPct =
-    courses.length > 0
-      ? Math.round(
-          (courses.reduce((sum: number, c: any) => sum + c.percentage, 0) /
-            courses.length) *
-            100
-        ) / 100
-      : 0;
-
-  const statusBadge = (status: string) => {
-    const s = status.toLowerCase();
-    if (s.includes("satisfactory")) return <Badge variant="default">Satisfactory</Badge>;
-    if (s.includes("condonation")) return <Badge variant="warning">Condonation</Badge>;
-    if (s.includes("shortage")) return <Badge variant="destructive">Shortage</Badge>;
-    return <Badge variant="secondary">{status}</Badge>;
-  };
 
   return (
     <DashboardLayout>
-      <div className="mb-6">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight">Attendance</h1>
-            <p className="text-muted-foreground">
-              Live per-subject attendance trapped from the Samvidha portal
-            </p>
-          </div>
-          <Button onClick={fetchData}>
-            <Activity className="h-4 w-4 mr-2" /> Refresh
-          </Button>
+      <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h1 className="flex items-center gap-2.5 text-2xl font-bold text-white">
+            <ClipboardList className="h-6 w-6 text-orange-400" /> Attendance Register
+          </h1>
+          <p className="mt-1 text-sm text-slate-400">Day-wise period attendance matrix from Samvidha</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <label className="flex items-center gap-2 text-xs text-slate-500">
+            <Filter className="h-3.5 w-3.5" />
+            <select
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              className="rounded-lg border border-[#1c2940] bg-[#0a1120] px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500"
+            >
+              <option value="ALL">All Subjects</option>
+              {matrix?.courses.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            onClick={load}
+            className="flex items-center gap-1.5 rounded-lg border border-orange-500/40 bg-orange-500/10 px-3.5 py-2 text-xs font-bold text-orange-300 hover:bg-orange-500/20"
+          >
+            <RefreshCw className="h-3.5 w-3.5" /> Refresh
+          </button>
         </div>
       </div>
 
-      {error && (
-        <div className="mb-6 p-4 rounded-lg bg-destructive/50 border border-destructive/20 text-destructive text-sm">
-          {error}
-        </div>
-      )}
-
-      {/* Summary cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-6">
-        <Card>
-          <CardHeader>
-            <CardTitle>Average Attendance</CardTitle>
-            <CardDescription>{avgPct}%</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="w-full bg-gray-200 rounded-full h-4">
-              <div
-                className={cn(
-                  "h-4 rounded-full transition-all duration-500",
-                  avgPct >= 75 ? "bg-green-500" : avgPct >= 60 ? "bg-yellow-500" : "bg-red-500",
-                  `w-[${Math.min(avgPct, 100)}%]`
-                )}
-              ></div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle>Total Subjects</CardTitle>
-            <CardDescription>{courses.length}</CardDescription>
-          </CardHeader>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle>Satisfactory</CardTitle>
-            <CardDescription>
-              {courses.filter((c: any) => c.status.toLowerCase().includes("satisfactory")).length}
-            </CardDescription>
-          </CardHeader>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle>Condonation</CardTitle>
-            <CardDescription>
-              {courses.filter((c: any) => c.status.toLowerCase().includes("condonation")).length}
-            </CardDescription>
-          </CardHeader>
-        </Card>
-      </div>
-
-      {/* Attendance chart */}
-      <Card className="mb-6">
-        <CardHeader>
-          <CardTitle>Attendance Percentage by Subject</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="h-80 w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={courses}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                <XAxis dataKey="courseName" tick={{ fontSize: 12 }} />
-                <YAxis label={{ value: "Attendance %", angle: -90, position: "insideLeft" }} />
-                <Tooltip />
-                <Legend />
-                <Bar dataKey="percentage" fill="#3b82f6" radius={[4, 4, 0, 0]}>
-                  {courses.map((entry: any, index: number) => (
-                    <Cell key={`cell-${index}`} fill={ATTENDANCE_COLORS[index % ATTENDANCE_COLORS.length]} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
+      {loading && !att ? (
+        <div className="flex h-64 items-center justify-center text-slate-400">Loading register…</div>
+      ) : matrix ? (
+        <div className="panel overflow-hidden">
+          <div className="border-b border-[#1c2940] px-5 py-3 text-xs font-semibold text-slate-400">
+            {matrix.dates.length} days × {matrix.courses.length} subjects • {att!.register.length} total entries
           </div>
-        </CardContent>
-      </Card>
-
-      {/* Attendance table */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Subject-wise Attendance</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm text-left">
-              <thead>
-                <tr className="border-b bg-gray-50">
-                  <th className="px-4 py-3 font-medium text-muted-foreground">#</th>
-                  <th className="px-4 py-3 font-medium text-muted-foreground">Course Code</th>
-                  <th className="px-4 py-3 font-medium text-muted-foreground">Course Name</th>
-                  <th className="px-4 py-3 font-medium text-muted-foreground">Type</th>
-                  <th className="px-4 py-3 font-medium text-muted-foreground">Category</th>
-                  <th className="px-4 py-3 font-medium text-muted-foreground text-right">Conducted</th>
-                  <th className="px-4 py-3 font-medium text-muted-foreground text-right">Attended</th>
-                  <th className="px-4 py-3 font-medium text-muted-foreground text-right">%</th>
-                  <th className="px-4 py-3 font-medium text-muted-foreground">Status</th>
+          <div className="max-h-[70vh] overflow-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="sticky top-0 bg-[#0d1526]">
+                <tr className="border-b border-[#1c2940]">
+                  <th className="px-4 py-3 font-bold tracking-wider text-slate-400">DATE</th>
+                  {shownCourses.map((c) => {
+                    const { p, a } = matrix.perCourse[c] || { p: 0, a: 0 };
+                    const pct = p + a > 0 ? Math.round((p / (p + a)) * 100) : 0;
+                    return (
+                      <th key={c} className="px-3 py-3 text-center font-semibold">
+                        <p className="max-w-[110px] truncate text-slate-300">{c}</p>
+                        <p className={`mt-0.5 ${pct >= 75 ? "text-emerald-400" : "text-red-400"}`}>{pct}%</p>
+                      </th>
+                    );
+                  })}
                 </tr>
               </thead>
               <tbody>
-                {courses.map((course: any) => (
-                  <tr key={course.courseCode} className="border-b hover:bg-gray-50/50">
-                    <td className="px-4 py-3">{course.sNo}</td>
-                    <td className="px-4 py-3 font-mono">{course.courseCode}</td>
-                    <td className="px-4 py-3">{course.courseName}</td>
-                    <td className="px-4 py-3">{course.courseType}</td>
-                    <td className="px-4 py-3">{course.courseCategory}</td>
-                    <td className="px-4 py-3 text-right">{course.conducted}</td>
-                    <td className="px-4 py-3 text-right">{course.attended}</td>
-                    <td className="px-4 py-3 text-right font-medium">{course.percentage}%</td>
-                    <td className="px-4 py-3">{statusBadge(course.status)}</td>
+                {matrix.dates.map((d) => (
+                  <tr key={d} className="border-b border-[#131d33] hover:bg-white/[0.02]">
+                    <td className="whitespace-nowrap px-4 py-3 font-semibold text-slate-200">{d}</td>
+                    {shownCourses.map((c) => {
+                      const e = matrix.cell.get(`${d}|${c}`);
+                      return <td key={c} className="px-3 py-3 text-center">{e ? badge(e.status) : <span className="text-slate-800">·</span>}</td>;
+                    })}
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-        </CardContent>
-        <CardFooter>
-          <p className="text-xs text-muted-foreground">
-            Data trapped live from Samvidha portal ({studentInfo.academicYear || ""} • {studentInfo.semester || ""})
-          </p>
-        </CardFooter>
-      </Card>
+        </div>
+      ) : (
+        <>
+          {/* Portal has no active register — explain + show real historical attendance */}
+          <div className="panel mb-4 flex items-start gap-3 px-5 py-4">
+            <Info className="mt-0.5 h-4 w-4 shrink-0 text-blue-400" />
+            <p className="text-sm text-slate-300">
+              {att?.portalNotice ||
+                "The portal has no day-wise attendance matrix for the current semester right now."}{" "}
+              <span className="text-slate-500">
+                (Academic Year {att?.academicYear || "—"}, semester last date {att?.semesterLastDate || "—"}.) The matrix
+                appears here automatically once the portal re-enables attendance for the next semester.
+              </span>
+            </p>
+          </div>
+
+          {credit && credit.semesters.length > 0 && (
+            <div className="panel overflow-hidden">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#1c2940] px-5 py-4">
+                <p className="text-sm font-semibold text-white">
+                  Historical course-wise attendance <span className="text-slate-500">(from Credit Register)</span>
+                </p>
+                <select
+                  value={historySem}
+                  onChange={(e) => setHistorySem(e.target.value)}
+                  className="rounded-lg border border-[#1c2940] bg-[#0a1120] px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500"
+                >
+                  {credit.semesters.map((s) => (
+                    <option key={s.semester} value={s.semester}>
+                      {s.semester}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[700px] text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-[#1c2940] text-slate-500">
+                      <th className="px-5 py-3 font-medium">Course Code</th>
+                      <th className="px-4 py-3 font-medium">Course Name</th>
+                      <th className="px-4 py-3 font-medium">Credits</th>
+                      <th className="px-4 py-3 font-medium">Attendance %</th>
+                      <th className="px-5 py-3 font-medium">Grade</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(credit.semesters.find((s) => s.semester === historySem)?.courses || []).map((c) => (
+                      <tr key={c.courseCode} className="border-b border-[#131d33] text-slate-300">
+                        <td className="px-5 py-2.5 font-semibold text-white">{c.courseCode}</td>
+                        <td className="px-4 py-2.5">{c.courseName}</td>
+                        <td className="px-4 py-2.5">{c.credits.toFixed(2)}</td>
+                        <td className={`px-4 py-2.5 font-bold ${(c.attendance ?? 0) >= 75 ? "text-emerald-400" : "text-red-400"}`}>
+                          {c.attendance === null ? "—" : `${c.attendance.toFixed(2)}%`}
+                        </td>
+                        <td className="px-5 py-2.5">{c.grade || "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </>
+      )}
     </DashboardLayout>
   );
 }

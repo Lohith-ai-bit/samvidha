@@ -18,8 +18,6 @@ export async function POST(req: Request) {
         {
           success: false,
           error: result.error || "Login failed.",
-          portalStatus: result.portalStatus,
-          portalBody: result.portalBody,
         },
         { status: 401 }
       );

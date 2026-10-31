@@ -1,33 +1,103 @@
 @import "tailwindcss";
 
 @theme {
-  --color-background: #ffffff;
-  --color-foreground: #171717;
+  --color-background: #070b14;
+  --color-foreground: #e2e8f0;
 
-  --color-primary: #2563eb;
+  --color-primary: #3b82f6;
   --color-primary-foreground: #ffffff;
 
-  --color-secondary: #f1f5f9;
-  --color-secondary-foreground: #171717;
+  --color-secondary: #111a2e;
+  --color-secondary-foreground: #e2e8f0;
 
-  --color-muted: #f1f5f9;
+  --color-muted: #0f1830;
   --color-muted-foreground: #64748b;
 
-  --color-accent: #f1f5f9;
-  --color-accent-foreground: #171717;
+  --color-accent: #8b5cf6;
+  --color-accent-foreground: #ffffff;
 
   --color-destructive: #ef4444;
   --color-destructive-foreground: #ffffff;
 
-  --color-border: #e2e8f0;
-  --color-input: #e2e8f0;
-  --color-ring: #2563eb;
+  --color-border: #1c2940;
+  --color-input: #1c2940;
+  --color-ring: #3b82f6;
+
+  --color-card: #0d1526;
+  --color-card-foreground: #e2e8f0;
 
   --radius: 0.75rem;
 }
 
+html,
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), system-ui, -apple-system, sans-serif;
+}
+
+/* Slim dark scrollbars to match the theme */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #0a0f1c;
+}
+::-webkit-scrollbar-thumb {
+  background: #1c2940;
+  border-radius: 8px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #2a3b5c;
+}
+
+/* App-wide panel look */
+.panel {
+  background: #0d1526;
+  border: 1px solid #1c2940;
+  border-radius: 0.9rem;
+}
+
+.panel-header {
+  border-bottom: 1px solid #1c2940;
+}
+
+/* Sidebar active item */
+.nav-active {
+  background: linear-gradient(90deg, rgba(59, 130, 246, 0.25), rgba(37, 99, 235, 0.12));
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  color: #93c5fd;
+}
+
+/* Light mode (toggle in the header) */
+html.light {
+  --color-background: #f1f5f9;
+  --color-foreground: #0f172a;
+  --color-card: #ffffff;
+  --color-card-foreground: #0f172a;
+  --color-border: #e2e8f0;
+  --color-input: #e2e8f0;
+  --color-muted: #f1f5f9;
+  --color-muted-foreground: #64748b;
+}
+html.light body {
+  background: var(--background);
+  color: var(--foreground);
+}
+html.light .panel {
+  background: #ffffff;
+  border-color: #e2e8f0;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+}
+html.light .nav-active {
+  background: linear-gradient(90deg, rgba(59, 130, 246, 0.14), rgba(37, 99, 235, 0.06));
+  border-color: rgba(59, 130, 246, 0.35);
+  color: #1d4ed8;
+}
+html.light ::-webkit-scrollbar-track {
+  background: #eef2f7;
+}
+html.light ::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
 }

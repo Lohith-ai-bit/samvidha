@@ -1,184 +1,140 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import Link from "next/link";
-import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { User, RefreshCw, FileText } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { User, RefreshCw, Fingerprint, GraduationCap, Users } from "lucide-react";
 import DashboardLayout from "@/components/dashboard/Layout";
+import { apiPost, getSession } from "@/lib/client";
+
+interface ProfileData {
+  details: Record<string, string>;
+  certificates: { sNo: number; name: string; status: string }[];
+}
+
+const LABELS: Record<string, string> = {
+  name: "Name",
+  rollno: "Roll Number",
+  abcId: "ABC ID",
+  aebasId: "JNTUH AEBAS ID",
+  branch: "Branch",
+  yearSem: "Year / Semester",
+  section: "Section",
+  gender: "Gender",
+  aadhar: "Aadhar Number",
+  fatherName: "Father Name",
+  motherName: "Mother Name",
+  fatherOccupationType: "Father Occupation Type",
+  fatherOccupation: "Father Occupation",
+  motherOccupationType: "Mother Occupation Type",
+  phone: "Phone Number",
+  email: "Email",
+  dob: "Date of Birth",
+  admissionYear: "Admission Year",
+};
 
 export default function ProfilePage() {
-  const [session, setSession] = useState<any>(null);
-  const [data, setData] = useState<any>(null);
+  const [data, setData] = useState<ProfileData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let activeSession = null;
-    if (typeof window !== "undefined") {
-      const stored = sessionStorage.getItem("samvidha_session");
-      if (stored) {
-        try {
-          activeSession = JSON.parse(stored);
-          setSession(activeSession);
-        } catch {
-          setSession(null);
-        }
-      }
-    }
-    fetchData(activeSession);
-  }, []);
-
-  async function fetchData(currentSession?: any) {
-    const active = currentSession || session;
-    if (!active) {
-      setLoading(false);
-      return;
-    }
+  const load = useCallback(async () => {
+    if (!getSession()) return;
     setLoading(true);
     try {
-      const res = await fetch("/api/profile", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ session: active }),
-      });
-      const json = await res.json();
-      if (json.success) {
-        setData(json.data);
-      } else {
-        setError(json.error || "Failed to load profile");
-      }
-    } catch (err: any) {
-      setError(err.message || "Failed to load profile");
+      const json = await apiPost<{ success: boolean; data: ProfileData }>("/api/profile");
+      if (json.success) setData(json.data || null);
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
 
-  if (loading) {
-    return (
-      <DashboardLayout>
-        <div className="flex flex-col items-center justify-center h-full">
-          <User className="h-10 w-10 animate-spin text-primary mb-2" />
-          <p className="text-muted-foreground">Fetching profile from Samvidha...</p>
-        </div>
-      </DashboardLayout>
-    );
-  }
+  useEffect(() => {
+    load();
+    const onSync = () => load();
+    window.addEventListener("iare:sync", onSync);
+    return () => window.removeEventListener("iare:sync", onSync);
+  }, [load]);
 
-  if (!session) {
-    return (
-      <DashboardLayout>
-        <div className="flex flex-col items-center justify-center h-full text-center">
-          <h1 className="text-2xl font-bold mb-2">Session expired</h1>
-          <p className="text-muted-foreground mb-6">Please log in again.</p>
-          <Link href="/">
-            <Button>Log in</Button>
-          </Link>
-        </div>
-      </DashboardLayout>
-    );
-  }
-
-  const parsed = data?.parsed || {};
-  const details = parsed.details || {};
-  const certificates = parsed.certificates || [];
+  const details = data?.details || {};
+  const entries = Object.entries(LABELS).filter(([k]) => details[k]);
 
   return (
     <DashboardLayout>
-      <div className="mb-6">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight">Profile</h1>
-            <p className="text-muted-foreground">
-              Student profile and certificates from Samvidha portal
-            </p>
-          </div>
-          <Button onClick={fetchData}>
-            <RefreshCw className="h-4 w-4 mr-2" /> Refresh
-          </Button>
+      <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h1 className="flex items-center gap-2.5 text-2xl font-bold text-white">
+            <User className="h-6 w-6 text-indigo-400" /> Profile
+          </h1>
+          <p className="mt-1 text-sm text-slate-400">Your student record as held by the Samvidha portal.</p>
         </div>
+        <button
+          onClick={load}
+          className="flex items-center gap-1.5 rounded-lg border border-[#1c2940] px-3.5 py-2 text-xs font-semibold text-slate-300 hover:bg-white/5"
+        >
+          <RefreshCw className="h-3.5 w-3.5" /> Refresh
+        </button>
       </div>
 
-      {error && (
-        <div className="mb-6 p-4 rounded-lg bg-destructive/50 border border-destructive/20 text-destructive text-sm">
-          {error}
-        </div>
-      )}
+      {loading && !data ? (
+        <div className="flex h-64 items-center justify-center text-slate-400">Loading profile…</div>
+      ) : (
+        <div className="space-y-4">
+          {/* Identity header */}
+          <div className="panel flex flex-wrap items-center gap-5 p-6">
+            <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-blue-600/15 border border-blue-500/30">
+              <GraduationCap className="h-8 w-8 text-blue-400" />
+            </div>
+            <div>
+              <h2 className="text-xl font-bold text-white">{details.name || "—"}</h2>
+              <p className="text-sm text-slate-400">
+                {details.rollno || getSession()?.username} • {details.branch || "—"} • Section {details.section || "—"}
+              </p>
+            </div>
+            {details.aebasId && (
+              <div className="ml-auto flex items-center gap-2 rounded-lg border border-indigo-500/30 bg-indigo-500/10 px-3.5 py-2">
+                <Fingerprint className="h-4 w-4 text-indigo-300" />
+                <span className="text-xs font-semibold text-indigo-200">AEBAS {details.aebasId}</span>
+              </div>
+            )}
+          </div>
 
-      {/* Student info card */}
-      <Card className="mb-6">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <User className="h-5 w-5" />
-            Student Information
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="p-4 rounded-lg bg-gray-50 border border-gray-100">
-            <p className="text-xs text-muted-foreground uppercase font-semibold">Name</p>
-            <p className="text-lg font-medium">{details.name || "—"}</p>
+          {/* Details grid */}
+          <div className="panel overflow-hidden">
+            <div className="border-b border-[#1c2940] px-6 py-4 text-sm font-bold text-white">Student Details</div>
+            <div className="grid grid-cols-1 md:grid-cols-2">
+              {entries.map(([k, label], i) => (
+                <div
+                  key={k}
+                  className={`flex items-center justify-between gap-4 px-6 py-3.5 text-sm ${
+                    i < entries.length - 1 ? "border-b border-[#131d33]" : ""
+                  } ${i % 2 === 0 ? "md:border-r" : ""}`}
+                >
+                  <span className="text-slate-500">{label}</span>
+                  <span className="text-right font-semibold text-white">{details[k]}</span>
+                </div>
+              ))}
+            </div>
           </div>
-          <div className="p-4 rounded-lg bg-gray-50 border border-gray-100">
-            <p className="text-xs text-muted-foreground uppercase font-semibold">Roll Number</p>
-            <p className="text-lg font-mono font-medium">{details.rollno || session.username}</p>
-          </div>
-          <div className="p-4 rounded-lg bg-gray-50 border border-gray-100">
-            <p className="text-xs text-muted-foreground uppercase font-semibold">Department</p>
-            <p className="text-lg font-medium">{details.department || "—"}</p>
-          </div>
-          <div className="p-4 rounded-lg bg-gray-50 border border-gray-100 md:col-span-3">
-            <p className="text-xs text-muted-foreground uppercase font-semibold">Session</p>
-            <p className="text-sm">
-              Authenticated with Samvidha portal (no data stored locally)
-            </p>
-          </div>
-        </CardContent>
-      </Card>
 
-      {/* Certificates */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <FileText className="h-5 w-5" />
-            Certificates & Documents
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {certificates.length > 0 ? (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm text-left border border-gray-200 rounded-lg">
-                <thead>
-                  <tr className="border-b bg-gray-50">
-                    <th className="px-4 py-3 font-medium text-muted-foreground w-8">#</th>
-                    <th className="px-4 py-3 font-medium text-muted-foreground">Certificate</th>
-                    <th className="px-4 py-3 font-medium text-muted-foreground">Status</th>
-                  </tr>
-                </thead>
+          {/* Certificates */}
+          {data?.certificates && data.certificates.length > 0 && (
+            <div className="panel overflow-hidden">
+              <div className="flex items-center gap-2 border-b border-[#1c2940] px-6 py-4 text-sm font-bold text-white">
+                <Users className="h-4 w-4 text-slate-400" /> Certificates
+              </div>
+              <table className="w-full text-left text-sm">
                 <tbody>
-                  {certificates.map((cert: any) => (
-                    <tr key={cert.name} className="border-b hover:bg-gray-50">
-                      <td className="px-4 py-3">{cert.sNo}</td>
-                      <td className="px-4 py-3">{cert.name}</td>
-                      <td className="px-4 py-3">
-                        <Badge variant="outline">{cert.status || "Available"}</Badge>
-                      </td>
+                  {data.certificates.map((c) => (
+                    <tr key={c.sNo} className="border-b border-[#131d33] text-slate-300">
+                      <td className="px-6 py-3 text-slate-500">{c.sNo}</td>
+                      <td className="px-4 py-3 font-medium text-white">{c.name}</td>
+                      <td className="px-6 py-3 text-right">{c.status}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-          ) : (
-            <p className="text-muted-foreground text-center py-8">No certificates found.</p>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      )}
     </DashboardLayout>
   );
 }
